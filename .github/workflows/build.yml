@@ -8,20 +8,24 @@ on:
         type: string
         required: true
         default: 'padavanonly'
+
       repo:
         description: 'ImmortalWrt 仓库的名字 (Name of ImmortalWrt repo)'
         type: string
         required: true
         default: 'immortalwrt-mt798x-6.6'
+
       branch:
         description: 'ImmortalWrt 仓库的分支 (Branch of ImmortalWrt repo)'
         type: string
         required: true
         default: 'openwrt-24.10-6.6'
+
       multithreading:
         description: '开启多线程编译 (Enable multithreading build)'
         type: boolean
         default: true
+
       ssh:
         description: '使用 ssh 连接到编译环境 (Connect to the build environment using ssh)'
         type: boolean
@@ -29,14 +33,68 @@ on:
 
 jobs:
   build:
-    if: ${{inputs.ssh == false}}
+    if: ${{ inputs.ssh == false }}
     runs-on: ubuntu-latest
     name: 🚀 编译 (Build)
+
     steps:
-      - name: 下载编译所需的依赖 (Install the software packages required for compilation)
+      - name: 下载编译所需的依赖 (Install build dependencies)
         run: |
           sudo apt update
-          sudo apt install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git git-core gperf haveged help2man intltool libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libreadline-dev libssl-dev libtool libzstd-dev lzma lzma-dev make nano ncurses-term patch pkgconf python3 python3-setuptools rsync scons squashfs-tools subversion swig texinfo unzip vim wget xxd zlib1g-dev
+          sudo apt install -y \
+            ack \
+            antlr3 \
+            asciidoc \
+            autoconf \
+            automake \
+            autopoint \
+            binutils \
+            bison \
+            build-essential \
+            bzip2 \
+            ccache \
+            cmake \
+            cpio \
+            curl \
+            device-tree-compiler \
+            fastjar \
+            flex \
+            gawk \
+            gettext \
+            gcc-multilib \
+            g++-multilib \
+            git \
+            gperf \
+            haveged \
+            help2man \
+            intltool \
+            libelf-dev \
+            libglib2.0-dev \
+            libgmp3-dev \
+            libltdl-dev \
+            libmpc-dev \
+            libmpfr-dev \
+            libncurses5-dev \
+            libncursesw5-dev \
+            libreadline-dev \
+            libssl-dev \
+            libtool \
+            libz-dev \
+            patch \
+            perl \
+            pkgconf \
+            python3 \
+            python3-dev \
+            python3-pip \
+            python3-setuptools \
+            rsync \
+            subversion \
+            swig \
+            unzip \
+            wget \
+            xsltproc \
+            xz-utils \
+            zlib1g-dev
 
       - name: 克隆当前仓库 (Clone current repo)
         uses: actions/checkout@v4
@@ -44,12 +102,13 @@ jobs:
       - name: 克隆 ImmortalWrt 仓库 (Clone ImmortalWrt repo)
         uses: actions/checkout@v4
         with:
-          repository: '${{inputs.owner}}/${{inputs.repo}}'
-          ref: ${{inputs.branch}}
+          repository: '${{ inputs.owner }}/${{ inputs.repo }}'
+          ref: ${{ inputs.branch }}
           path: ImmortalWrt
 
-      - name: 复制当前仓库的配置文件到 ImmortalWrt 仓库  (Copy current repo config to ImmortalWrt repo)
-        run: cp -f .config feeds.conf.default diy.sh ImmortalWrt/
+      - name: 复制配置文件 (Copy configuration files)
+        run: |
+          cp -f .config feeds.conf.default diy.sh ImmortalWrt/
 
       - name: 运行 diy.sh (Run diy.sh)
         working-directory: ImmortalWrt
@@ -57,12 +116,31 @@ jobs:
           chmod +x diy.sh
           ./diy.sh
 
-      - name: 更新并下载 feeds (Update and download feeds)
+      - name: 更新并安装 feeds (Update and install feeds)
         working-directory: ImmortalWrt
-        run: ./scripts/feeds update -a && ./scripts/feeds install -a
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
 
-      - name: 再次复制当前仓库的配置文件到 ImmortalWrt 仓库 (Copy current repo config to ImmortalWrt repo again)
-        run: cp -f .config feeds.conf.default diy.sh ImmortalWrt/
+      - name: 再次复制配置文件 (Copy configuration files again)
+        run: |
+          cp -f .config feeds.conf.default diy.sh ImmortalWrt/
+
+      - name: 禁用 GDB 工具链组件 (Disable GDB)
+        working-directory: ImmortalWrt
+        run: |
+          ./scripts/config --disable GDB
+          ./scripts/config --disable GDB_PYTHON
+
+          make defconfig
+
+          if grep -q '^CONFIG_GDB=y' .config; then
+            echo '错误：CONFIG_GDB 仍然启用'
+            exit 1
+          fi
+
+          echo 'GDB 已成功禁用'
+          grep -E 'CONFIG_GDB|GDB_PYTHON' .config || true
 
       - name: 编译前上传配置 (Upload config before build)
         uses: actions/upload-artifact@v4
@@ -72,31 +150,88 @@ jobs:
             ImmortalWrt/feeds.conf.default
             ImmortalWrt/.config
 
-      - name: 多线程编译 ImmortalWrt (Build ImmortalWrt multithreading)
-        if: ${{inputs.multithreading == true}}
+      - name: 多线程编译 ImmortalWrt (Build ImmortalWrt with multiple threads)
+        if: ${{ inputs.multithreading == true }}
         working-directory: ImmortalWrt
-        run: make -j$(nproc) V=s
+        run: |
+          make -j$(nproc) V=s
 
-      - name: 单线程编译 ImmortalWrt (Build ImmortalWrt single thread)
-        if: ${{inputs.multithreading == false}}
+      - name: 单线程编译 ImmortalWrt (Build ImmortalWrt with one thread)
+        if: ${{ inputs.multithreading == false }}
         working-directory: ImmortalWrt
-        run: make -j1 V=s
+        run: |
+          make -j1 V=s
 
-      - name: 上传编译结果到 Artifact (Upload build result to Artifact)
+      - name: 上传编译结果 (Upload build result)
         uses: actions/upload-artifact@v4
         with:
           name: ImmortalWrt-build-result
           path: ImmortalWrt/bin/targets
 
+
   build-ssh:
-    if: ${{inputs.ssh == true}}
-    name: 🚀 编译 (Build) - SSH
+    if: ${{ inputs.ssh == true }}
     runs-on: ubuntu-latest
+    name: 🚀 编译 (Build) - SSH
+
     steps:
-      - name: 下载编译所需的依赖 (Install the software packages required for compilation)
+      - name: 下载编译所需的依赖 (Install build dependencies)
         run: |
           sudo apt update
-          sudo apt install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git git-core gperf haveged help2man intltool libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libreadline-dev libssl-dev libtool libzstd-dev lzma lzma-dev make nano ncurses-term patch pkgconf python3 python3-setuptools rsync scons squashfs-tools subversion swig texinfo unzip vim wget xxd zlib1g-dev
+          sudo apt install -y \
+            ack \
+            antlr3 \
+            asciidoc \
+            autoconf \
+            automake \
+            autopoint \
+            binutils \
+            bison \
+            build-essential \
+            bzip2 \
+            ccache \
+            cmake \
+            cpio \
+            curl \
+            device-tree-compiler \
+            fastjar \
+            flex \
+            gawk \
+            gettext \
+            gcc-multilib \
+            g++-multilib \
+            git \
+            gperf \
+            haveged \
+            help2man \
+            intltool \
+            libelf-dev \
+            libglib2.0-dev \
+            libgmp3-dev \
+            libltdl-dev \
+            libmpc-dev \
+            libmpfr-dev \
+            libncurses5-dev \
+            libncursesw5-dev \
+            libreadline-dev \
+            libssl-dev \
+            libtool \
+            libz-dev \
+            patch \
+            perl \
+            pkgconf \
+            python3 \
+            python3-dev \
+            python3-pip \
+            python3-setuptools \
+            rsync \
+            subversion \
+            swig \
+            unzip \
+            wget \
+            xsltproc \
+            xz-utils \
+            zlib1g-dev
 
       - name: 克隆当前仓库 (Clone current repo)
         uses: actions/checkout@v4
@@ -104,14 +239,50 @@ jobs:
       - name: 克隆 ImmortalWrt 仓库 (Clone ImmortalWrt repo)
         uses: actions/checkout@v4
         with:
-          repository: '${{inputs.owner}}/${{inputs.repo}}'
-          ref: ${{inputs.branch}}
+          repository: '${{ inputs.owner }}/${{ inputs.repo }}'
+          ref: ${{ inputs.branch }}
           path: ImmortalWrt
+
+      - name: 复制配置文件 (Copy configuration files)
+        run: |
+          cp -f .config feeds.conf.default diy.sh ImmortalWrt/
+
+      - name: 运行 diy.sh (Run diy.sh)
+        working-directory: ImmortalWrt
+        run: |
+          chmod +x diy.sh
+          ./diy.sh
+
+      - name: 更新并安装 feeds (Update and install feeds)
+        working-directory: ImmortalWrt
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: 再次复制配置文件 (Copy configuration files again)
+        run: |
+          cp -f .config feeds.conf.default diy.sh ImmortalWrt/
 
       - name: 开启 SSH 服务 (Start SSH service)
         uses: lhotari/action-upterm@v1
         with:
           wait-timeout-minutes: 20
+
+      - name: 禁用 GDB 工具链组件 (Disable GDB)
+        working-directory: ImmortalWrt
+        run: |
+          ./scripts/config --disable GDB
+          ./scripts/config --disable GDB_PYTHON
+
+          make defconfig
+
+          if grep -q '^CONFIG_GDB=y' .config; then
+            echo '错误：CONFIG_GDB 仍然启用'
+            exit 1
+          fi
+
+          echo 'GDB 已成功禁用'
+          grep -E 'CONFIG_GDB|GDB_PYTHON' .config || true
 
       - name: 编译前上传配置 (Upload config before build)
         uses: actions/upload-artifact@v4
@@ -121,17 +292,19 @@ jobs:
             ImmortalWrt/feeds.conf.default
             ImmortalWrt/.config
 
-      - name: 多线程编译 ImmortalWrt (Build ImmortalWrt multithreading)
-        if: ${{inputs.multithreading == true}}
+      - name: 多线程编译 ImmortalWrt (Build ImmortalWrt with multiple threads)
+        if: ${{ inputs.multithreading == true }}
         working-directory: ImmortalWrt
-        run: make -j$(nproc) V=s
+        run: |
+          make -j$(nproc) V=s
 
-      - name: 单线程编译 ImmortalWrt (Build ImmortalWrt single thread)
-        if: ${{inputs.multithreading == false}}
+      - name: 单线程编译 ImmortalWrt (Build ImmortalWrt with one thread)
+        if: ${{ inputs.multithreading == false }}
         working-directory: ImmortalWrt
-        run: make -j1 V=s
+        run: |
+          make -j1 V=s
 
-      - name: 上传编译结果到 Artifact (Upload build result to Artifact)
+      - name: 上传编译结果 (Upload build result)
         uses: actions/upload-artifact@v4
         with:
           name: ImmortalWrt-build-result
