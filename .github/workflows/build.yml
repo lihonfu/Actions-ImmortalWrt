@@ -36,7 +36,7 @@ jobs:
       - name: 下载编译所需的依赖 (Install the software packages required for compilation)
         run: |
           sudo apt update
-          sudo apt install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git git-core gperf haveged help2man intltoolize libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libreadline-dev libssl-dev libtool libzstd-dev lzma lzma-dev make nano ncurses-term patch pkgconf python3 python3-distutils rsync scons squashfs-tools subversion swig texinfo unzip vim wget xxd zlib1g-dev
+          sudo apt install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git git-core gperf haveged help2man intltool libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libreadline-dev libssl-dev libtool libzstd-dev lzma lzma-dev make nano ncurses-term patch pkgconf python3 python3-setuptools rsync scons squashfs-tools subversion swig texinfo unzip vim wget xxd zlib1g-dev
 
       - name: 克隆当前仓库 (Clone current repo)
         uses: actions/checkout@v4
@@ -96,7 +96,7 @@ jobs:
       - name: 下载编译所需的依赖 (Install the software packages required for compilation)
         run: |
           sudo apt update
-          sudo apt install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git git-core gperf haveged help2man intltoolize libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libreadline-dev libssl-dev libtool libzstd-dev lzma lzma-dev make nano ncurses-term patch pkgconf python3 python3-distutils rsync scons squashfs-tools subversion swig texinfo unzip vim wget xxd zlib1g-dev
+          sudo apt install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git git-core gperf haveged help2man intltool libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libreadline-dev libssl-dev libtool libzstd-dev lzma lzma-dev make nano ncurses-term patch pkgconf python3 python3-setuptools rsync scons squashfs-tools subversion swig texinfo unzip vim wget xxd zlib1g-dev
 
       - name: 克隆当前仓库 (Clone current repo)
         uses: actions/checkout@v4
