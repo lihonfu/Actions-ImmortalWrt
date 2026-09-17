@@ -129,13 +129,20 @@ jobs:
       - name: 禁用 GDB 工具链组件 (Disable GDB)
         working-directory: ImmortalWrt
         run: |
-          ./scripts/config --disable GDB
-          ./scripts/config --disable GDB_PYTHON
+          set -e
+
+          # scripts/config 在当前 ImmortalWrt 版本中是目录，不是可执行脚本
+          # 直接修改 .config，避免执行 ./scripts/config
+          sed -i -E \
+            -e 's/^CONFIG_GDB=y$/# CONFIG_GDB is not set/' \
+            -e 's/^CONFIG_GDB_PYTHON=y$/# CONFIG_GDB_PYTHON is not set/' \
+            .config
 
           make defconfig
 
-          if grep -q '^CONFIG_GDB=y' .config; then
-            echo '错误：CONFIG_GDB 仍然启用'
+          if grep -qE '^CONFIG_GDB=y|^CONFIG_GDB_PYTHON=y' .config; then
+            echo '错误：GDB 仍然启用'
+            grep -E 'CONFIG_GDB|GDB_PYTHON' .config || true
             exit 1
           fi
 
@@ -271,13 +278,20 @@ jobs:
       - name: 禁用 GDB 工具链组件 (Disable GDB)
         working-directory: ImmortalWrt
         run: |
-          ./scripts/config --disable GDB
-          ./scripts/config --disable GDB_PYTHON
+          set -e
+
+          # scripts/config 在当前 ImmortalWrt 版本中是目录，不是可执行脚本
+          # 直接修改 .config，避免执行 ./scripts/config
+          sed -i -E \
+            -e 's/^CONFIG_GDB=y$/# CONFIG_GDB is not set/' \
+            -e 's/^CONFIG_GDB_PYTHON=y$/# CONFIG_GDB_PYTHON is not set/' \
+            .config
 
           make defconfig
 
-          if grep -q '^CONFIG_GDB=y' .config; then
-            echo '错误：CONFIG_GDB 仍然启用'
+          if grep -qE '^CONFIG_GDB=y|^CONFIG_GDB_PYTHON=y' .config; then
+            echo '错误：GDB 仍然启用'
+            grep -E 'CONFIG_GDB|GDB_PYTHON' .config || true
             exit 1
           fi
 
