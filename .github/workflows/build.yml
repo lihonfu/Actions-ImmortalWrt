@@ -40,8 +40,9 @@ jobs:
     steps:
       - name: 下载编译所需的依赖 (Install build dependencies)
         run: |
-          sudo apt update
-          sudo apt install -y \
+          sudo apt-get update
+
+          sudo apt-get install -y \
             ack \
             antlr3 \
             asciidoc \
@@ -106,48 +107,113 @@ jobs:
           ref: ${{ inputs.branch }}
           path: ImmortalWrt
 
-      - name: 复制配置文件 (Copy configuration files)
+      - name: 复制配置和构建脚本 (Copy configuration and build scripts)
         run: |
-          cp -f .config feeds.conf.default diy.sh ImmortalWrt/
+          set -eux
+
+          cp -f .config ImmortalWrt/.config
+          cp -f feeds.conf.default ImmortalWrt/feeds.conf.default
+          cp -f diy.sh ImmortalWrt/diy.sh
 
       - name: 运行 diy.sh (Run diy.sh)
         working-directory: ImmortalWrt
         run: |
+          set -eux
+
           chmod +x diy.sh
           ./diy.sh
 
       - name: 更新并安装 feeds (Update and install feeds)
         working-directory: ImmortalWrt
         run: |
+          set -eux
+
+          ./scripts/feeds clean
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: 再次复制配置文件 (Copy configuration files again)
+      - name: 删除产生递归依赖的 ksmbd 包 (Remove recursive ksmbd package)
+        working-directory: ImmortalWrt
         run: |
-          cp -f .config feeds.conf.default diy.sh ImmortalWrt/
+          set -eux
+
+          # 当前 feeds 中的 kmod-fs-ksmbd 会生成如下递归依赖：
+          #
+          # PACKAGE_kmod-fs-ksmbd
+          #   selects PACKAGE_kmod-fs-ksmbd
+          #
+          # 该包不是本次固件编译的必要组件，因此删除其源目录和 feed 链接。
+          find feeds package/feeds \
+            -type d \
+            \( -iname '*ksmbd*' -o -iname '*ksmbd-server*' \) \
+            -print \
+            -exec rm -rf {} + 2>/dev/null || true
+
+          # 清理配置中可能存在的 ksmbd 选项。
+          sed -i -E \
+            -e 's/^CONFIG_PACKAGE_kmod-fs-ksmbd=y$/# CONFIG_PACKAGE_kmod-fs-ksmbd is not set/' \
+            -e 's/^CONFIG_PACKAGE_ksmbd-server=y$/# CONFIG_PACKAGE_ksmbd-server is not set/' \
+            -e 's/^CONFIG_PACKAGE_ksmbd-utils=y$/# CONFIG_PACKAGE_ksmbd-utils is not set/' \
+            .config
+
+      - name: 生成最终配置 (Generate final configuration)
+        working-directory: ImmortalWrt
+        run: |
+          set -eux
+
+          # 注意：此处是唯一一次执行 make defconfig。
+          # 禁用 GDB 的操作必须放在此命令之后。
+          make defconfig
 
       - name: 禁用 GDB 工具链组件 (Disable GDB)
         working-directory: ImmortalWrt
         run: |
-          set -e
+          set -eux
 
-          # scripts/config 在当前 ImmortalWrt 版本中是目录，不是可执行脚本
-          # 直接修改 .config，避免执行 ./scripts/config
+          # make defconfig 会根据 Kconfig 重新生成配置，
+          # 因此必须在 make defconfig 之后修改 GDB 选项。
           sed -i -E \
             -e 's/^CONFIG_GDB=y$/# CONFIG_GDB is not set/' \
             -e 's/^CONFIG_GDB_PYTHON=y$/# CONFIG_GDB_PYTHON is not set/' \
+            -e 's/^CONFIG_PACKAGE_gdb=y$/# CONFIG_PACKAGE_gdb is not set/' \
+            -e 's/^CONFIG_PACKAGE_gdbserver=y$/# CONFIG_PACKAGE_gdbserver is not set/' \
             .config
 
-          make defconfig
+          # 如果配置中不存在对应项目，则主动追加禁用项。
+          grep -q '^CONFIG_GDB=' .config || \
+            echo '# CONFIG_GDB is not set' >> .config
 
-          if grep -qE '^CONFIG_GDB=y|^CONFIG_GDB_PYTHON=y' .config; then
+          grep -q '^CONFIG_GDB_PYTHON=' .config || \
+            echo '# CONFIG_GDB_PYTHON is not set' >> .config
+
+          # 验证 GDB 以及 gdbserver 均未启用。
+          if grep -qE '^(CONFIG_GDB|CONFIG_GDB_PYTHON|CONFIG_PACKAGE_gdb|CONFIG_PACKAGE_gdbserver)=y' .config; then
             echo '错误：GDB 仍然启用'
-            grep -E 'CONFIG_GDB|GDB_PYTHON' .config || true
+            grep -E '^(CONFIG_GDB|CONFIG_GDB_PYTHON|CONFIG_PACKAGE_gdb|CONFIG_PACKAGE_gdbserver)' .config || true
             exit 1
           fi
 
           echo 'GDB 已成功禁用'
-          grep -E 'CONFIG_GDB|GDB_PYTHON' .config || true
+          grep -E '^(CONFIG_GDB|CONFIG_GDB_PYTHON|CONFIG_PACKAGE_gdb|CONFIG_PACKAGE_gdbserver)' .config || true
+
+      - name: 检查最终配置 (Validate final configuration)
+        working-directory: ImmortalWrt
+        run: |
+          set -eux
+
+          if grep -qE '^CONFIG_PACKAGE_kmod-fs-ksmbd=y|^CONFIG_PACKAGE_ksmbd-server=y|^CONFIG_PACKAGE_ksmbd-utils=y' .config; then
+            echo '错误：ksmbd 相关软件包仍然启用'
+            grep -E 'ksmbd' .config || true
+            exit 1
+          fi
+
+          if grep -qE '^(CONFIG_GDB|CONFIG_GDB_PYTHON|CONFIG_PACKAGE_gdb|CONFIG_PACKAGE_gdbserver)=y' .config; then
+            echo '错误：GDB 相关组件仍然启用'
+            grep -E '^(CONFIG_GDB|CONFIG_GDB_PYTHON|CONFIG_PACKAGE_gdb|CONFIG_PACKAGE_gdbserver)' .config || true
+            exit 1
+          fi
+
+          echo '最终配置检查通过'
 
       - name: 编译前上传配置 (Upload config before build)
         uses: actions/upload-artifact@v4
@@ -161,12 +227,14 @@ jobs:
         if: ${{ inputs.multithreading == true }}
         working-directory: ImmortalWrt
         run: |
-          make -j$(nproc) V=s
+          set -eux
+          make -j"$(nproc)" V=s
 
       - name: 单线程编译 ImmortalWrt (Build ImmortalWrt with one thread)
         if: ${{ inputs.multithreading == false }}
         working-directory: ImmortalWrt
         run: |
+          set -eux
           make -j1 V=s
 
       - name: 上传编译结果 (Upload build result)
@@ -184,8 +252,9 @@ jobs:
     steps:
       - name: 下载编译所需的依赖 (Install build dependencies)
         run: |
-          sudo apt update
-          sudo apt install -y \
+          sudo apt-get update
+
+          sudo apt-get install -y \
             ack \
             antlr3 \
             asciidoc \
@@ -250,25 +319,54 @@ jobs:
           ref: ${{ inputs.branch }}
           path: ImmortalWrt
 
-      - name: 复制配置文件 (Copy configuration files)
+      - name: 复制配置和构建脚本 (Copy configuration and build scripts)
         run: |
-          cp -f .config feeds.conf.default diy.sh ImmortalWrt/
+          set -eux
+
+          cp -f .config ImmortalWrt/.config
+          cp -f feeds.conf.default ImmortalWrt/feeds.conf.default
+          cp -f diy.sh ImmortalWrt/diy.sh
 
       - name: 运行 diy.sh (Run diy.sh)
         working-directory: ImmortalWrt
         run: |
+          set -eux
+
           chmod +x diy.sh
           ./diy.sh
 
       - name: 更新并安装 feeds (Update and install feeds)
         working-directory: ImmortalWrt
         run: |
+          set -eux
+
+          ./scripts/feeds clean
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: 再次复制配置文件 (Copy configuration files again)
+      - name: 删除产生递归依赖的 ksmbd 包 (Remove recursive ksmbd package)
+        working-directory: ImmortalWrt
         run: |
-          cp -f .config feeds.conf.default diy.sh ImmortalWrt/
+          set -eux
+
+          find feeds package/feeds \
+            -type d \
+            \( -iname '*ksmbd*' -o -iname '*ksmbd-server*' \) \
+            -print \
+            -exec rm -rf {} + 2>/dev/null || true
+
+          sed -i -E \
+            -e 's/^CONFIG_PACKAGE_kmod-fs-ksmbd=y$/# CONFIG_PACKAGE_kmod-fs-ksmbd is not set/' \
+            -e 's/^CONFIG_PACKAGE_ksmbd-server=y$/# CONFIG_PACKAGE_ksmbd-server is not set/' \
+            -e 's/^CONFIG_PACKAGE_ksmbd-utils=y$/# CONFIG_PACKAGE_ksmbd-utils is not set/' \
+            .config
+
+      - name: 生成最终配置 (Generate final configuration)
+        working-directory: ImmortalWrt
+        run: |
+          set -eux
+
+          make defconfig
 
       - name: 开启 SSH 服务 (Start SSH service)
         uses: lhotari/action-upterm@v1
@@ -278,25 +376,48 @@ jobs:
       - name: 禁用 GDB 工具链组件 (Disable GDB)
         working-directory: ImmortalWrt
         run: |
-          set -e
+          set -eux
 
-          # scripts/config 在当前 ImmortalWrt 版本中是目录，不是可执行脚本
-          # 直接修改 .config，避免执行 ./scripts/config
           sed -i -E \
             -e 's/^CONFIG_GDB=y$/# CONFIG_GDB is not set/' \
             -e 's/^CONFIG_GDB_PYTHON=y$/# CONFIG_GDB_PYTHON is not set/' \
+            -e 's/^CONFIG_PACKAGE_gdb=y$/# CONFIG_PACKAGE_gdb is not set/' \
+            -e 's/^CONFIG_PACKAGE_gdbserver=y$/# CONFIG_PACKAGE_gdbserver is not set/' \
             .config
 
-          make defconfig
+          grep -q '^CONFIG_GDB=' .config || \
+            echo '# CONFIG_GDB is not set' >> .config
 
-          if grep -qE '^CONFIG_GDB=y|^CONFIG_GDB_PYTHON=y' .config; then
+          grep -q '^CONFIG_GDB_PYTHON=' .config || \
+            echo '# CONFIG_GDB_PYTHON is not set' >> .config
+
+          if grep -qE '^(CONFIG_GDB|CONFIG_GDB_PYTHON|CONFIG_PACKAGE_gdb|CONFIG_PACKAGE_gdbserver)=y' .config; then
             echo '错误：GDB 仍然启用'
-            grep -E 'CONFIG_GDB|GDB_PYTHON' .config || true
+            grep -E '^(CONFIG_GDB|CONFIG_GDB_PYTHON|CONFIG_PACKAGE_gdb|CONFIG_PACKAGE_gdbserver)' .config || true
             exit 1
           fi
 
           echo 'GDB 已成功禁用'
-          grep -E 'CONFIG_GDB|GDB_PYTHON' .config || true
+          grep -E '^(CONFIG_GDB|CONFIG_GDB_PYTHON|CONFIG_PACKAGE_gdb|CONFIG_PACKAGE_gdbserver)' .config || true
+
+      - name: 检查最终配置 (Validate final configuration)
+        working-directory: ImmortalWrt
+        run: |
+          set -eux
+
+          if grep -qE '^CONFIG_PACKAGE_kmod-fs-ksmbd=y|^CONFIG_PACKAGE_ksmbd-server=y|^CONFIG_PACKAGE_ksmbd-utils=y' .config; then
+            echo '错误：ksmbd 相关软件包仍然启用'
+            grep -E 'ksmbd' .config || true
+            exit 1
+          fi
+
+          if grep -qE '^(CONFIG_GDB|CONFIG_GDB_PYTHON|CONFIG_PACKAGE_gdb|CONFIG_PACKAGE_gdbserver)=y' .config; then
+            echo '错误：GDB 相关组件仍然启用'
+            grep -E '^(CONFIG_GDB|CONFIG_GDB_PYTHON|CONFIG_PACKAGE_gdb|CONFIG_PACKAGE_gdbserver)' .config || true
+            exit 1
+          fi
+
+          echo '最终配置检查通过'
 
       - name: 编译前上传配置 (Upload config before build)
         uses: actions/upload-artifact@v4
@@ -310,12 +431,14 @@ jobs:
         if: ${{ inputs.multithreading == true }}
         working-directory: ImmortalWrt
         run: |
-          make -j$(nproc) V=s
+          set -eux
+          make -j"$(nproc)" V=s
 
       - name: 单线程编译 ImmortalWrt (Build ImmortalWrt with one thread)
         if: ${{ inputs.multithreading == false }}
         working-directory: ImmortalWrt
         run: |
+          set -eux
           make -j1 V=s
 
       - name: 上传编译结果 (Upload build result)
