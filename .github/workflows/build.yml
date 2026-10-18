@@ -327,7 +327,7 @@ jobs:
           cp -f feeds.conf.default ImmortalWrt/feeds.conf.default
           cp -f diy.sh ImmortalWrt/diy.sh
 
-- name: 修改为 NAND U-Boot 适配型号 (Configure NAND U-Boot target)
+      - name: 修改为 NAND U-Boot 适配型号 (Configure NAND U-Boot target)
         run: |
           set -eux
           # 删掉默认的 eMMC / 标准版配置项
