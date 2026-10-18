@@ -34,71 +34,106 @@ on:
 jobs:
   build:
     if: ${{ inputs.ssh == false }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
     name: 🚀 编译 (Build)
 
     steps:
-      - name: 下载编译所需的依赖 (Install build dependencies)
+      - name: 初始化环境 (Initialize environment)
         run: |
-          sudo apt-get update
+          set -euxo pipefail
+          echo "CI runner: $RUNNER_OS"
+          uname -a
+          df -h
+          free -h
 
-          sudo apt-get install -y \
-            ack \
-            antlr3 \
-            asciidoc \
-            autoconf \
-            automake \
-            autopoint \
-            binutils \
-            bison \
-            build-essential \
-            bzip2 \
-            ccache \
-            cmake \
-            cpio \
-            curl \
-            device-tree-compiler \
-            fastjar \
-            flex \
-            gawk \
-            gettext \
-            gcc-multilib \
-            g++-multilib \
-            git \
-            gperf \
-            haveged \
-            help2man \
-            intltool \
-            libelf-dev \
-            libglib2.0-dev \
-            libgmp3-dev \
-            libltdl-dev \
-            libmpc-dev \
-            libmpfr-dev \
-            libncurses5-dev \
-            libncursesw5-dev \
-            libreadline-dev \
-            libssl-dev \
-            libtool \
-            libz-dev \
-            patch \
-            perl \
-            pkgconf \
-            python3 \
-            python3-dev \
-            python3-pip \
-            python3-setuptools \
-            rsync \
-            subversion \
-            swig \
-            unzip \
-            wget \
-            xsltproc \
-            xz-utils \
-            zlib1g-dev
+      - name: 配置 ccache (Setup ccache)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/ccache
+            ~/.cache/pip
+          key: ${{ runner.os }}-immortalwrt-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-immortalwrt-
+
+      - name: 下载编译所需的依赖 (Install build dependencies)
+        timeout-minutes: 30
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          retry_apt() {
+            local attempt=1
+            while (( attempt <= 5 )); do
+              echo "APT attempt ${attempt}/5"
+              sudo DEBIAN_FRONTEND=noninteractive apt-get update && \
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+                ack \
+                antlr3 \
+                asciidoc \
+                autoconf \
+                automake \
+                autopoint \
+                binutils \
+                bison \
+                build-essential \
+                bzip2 \
+                ccache \
+                cmake \
+                cpio \
+                curl \
+                device-tree-compiler \
+                fastjar \
+                flex \
+                gawk \
+                gettext \
+                gcc-multilib \
+                g++-multilib \
+                git \
+                gperf \
+                haveged \
+                help2man \
+                intltool \
+                libelf-dev \
+                libglib2.0-dev \
+                libgmp3-dev \
+                libltdl-dev \
+                libmpc-dev \
+                libmpfr-dev \
+                libncurses-dev \
+                libreadline-dev \
+                libssl-dev \
+                libtool \
+                patch \
+                perl \
+                pkgconf \
+                python3 \
+                python3-dev \
+                python3-pip \
+                python3-setuptools \
+                rsync \
+                subversion \
+                swig \
+                unzip \
+                wget \
+                xsltproc \
+                xz-utils \
+                zlib1g-dev && return 0
+              echo "apt install failed, retrying in 20s..."
+              sleep 20
+              attempt=$((attempt+1))
+            done
+            echo "apt install failed after 5 attempts"
+            exit 1
+          }
+
+          retry_apt
 
       - name: 克隆当前仓库 (Clone current repo)
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: 克隆 ImmortalWrt 仓库 (Clone ImmortalWrt repo)
         uses: actions/checkout@v4
@@ -106,50 +141,43 @@ jobs:
           repository: '${{ inputs.owner }}/${{ inputs.repo }}'
           ref: ${{ inputs.branch }}
           path: ImmortalWrt
+          fetch-depth: 1
 
       - name: 复制配置和构建脚本 (Copy configuration and build scripts)
         run: |
-          set -eux
-
+          set -euxo pipefail
           cp -f .config ImmortalWrt/.config
           cp -f feeds.conf.default ImmortalWrt/feeds.conf.default
           cp -f diy.sh ImmortalWrt/diy.sh
 
       - name: 运行 diy.sh (Run diy.sh)
         working-directory: ImmortalWrt
+        timeout-minutes: 30
         run: |
-          set -eux
-
+          set -euxo pipefail
           chmod +x diy.sh
           ./diy.sh
 
       - name: 更新并安装 feeds (Update and install feeds)
         working-directory: ImmortalWrt
+        timeout-minutes: 30
         run: |
-          set -eux
-
+          set -euxo pipefail
           ./scripts/feeds clean
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
       - name: 删除产生递归依赖的 ksmbd 包 (Remove recursive ksmbd package)
         working-directory: ImmortalWrt
+        timeout-minutes: 15
         run: |
-          set -eux
-
-          # 当前 feeds 中的 kmod-fs-ksmbd 会生成如下递归依赖：
-          #
-          # PACKAGE_kmod-fs-ksmbd
-          #   selects PACKAGE_kmod-fs-ksmbd
-          #
-          # 该包不是本次固件编译的必要组件，因此删除其源目录和 feed 链接。
+          set -euxo pipefail
           find feeds package/feeds \
             -type d \
             \( -iname '*ksmbd*' -o -iname '*ksmbd-server*' \) \
             -print \
             -exec rm -rf {} + 2>/dev/null || true
 
-          # 清理配置中可能存在的 ksmbd 选项。
           sed -i -E \
             -e 's/^CONFIG_PACKAGE_kmod-fs-ksmbd=y$/# CONFIG_PACKAGE_kmod-fs-ksmbd is not set/' \
             -e 's/^CONFIG_PACKAGE_ksmbd-server=y$/# CONFIG_PACKAGE_ksmbd-server is not set/' \
@@ -158,20 +186,16 @@ jobs:
 
       - name: 生成最终配置 (Generate final configuration)
         working-directory: ImmortalWrt
+        timeout-minutes: 30
         run: |
-          set -eux
-
-          # 注意：此处是唯一一次执行 make defconfig。
-          # 禁用 GDB 的操作必须放在此命令之后。
+          set -euxo pipefail
           make defconfig
 
       - name: 禁用 GDB 工具链组件 (Disable GDB)
         working-directory: ImmortalWrt
+        timeout-minutes: 15
         run: |
-          set -eux
-
-          # make defconfig 会根据 Kconfig 重新生成配置，
-          # 因此必须在 make defconfig 之后修改 GDB 选项。
+          set -euxo pipefail
           sed -i -E \
             -e 's/^CONFIG_GDB=y$/# CONFIG_GDB is not set/' \
             -e 's/^CONFIG_GDB_PYTHON=y$/# CONFIG_GDB_PYTHON is not set/' \
@@ -179,14 +203,9 @@ jobs:
             -e 's/^CONFIG_PACKAGE_gdbserver=y$/# CONFIG_PACKAGE_gdbserver is not set/' \
             .config
 
-          # 如果配置中不存在对应项目，则主动追加禁用项。
-          grep -q '^CONFIG_GDB=' .config || \
-            echo '# CONFIG_GDB is not set' >> .config
+          grep -q '^CONFIG_GDB=' .config || echo '# CONFIG_GDB is not set' >> .config
+          grep -q '^CONFIG_GDB_PYTHON=' .config || echo '# CONFIG_GDB_PYTHON is not set' >> .config
 
-          grep -q '^CONFIG_GDB_PYTHON=' .config || \
-            echo '# CONFIG_GDB_PYTHON is not set' >> .config
-
-          # 验证 GDB 以及 gdbserver 均未启用。
           if grep -qE '^(CONFIG_GDB|CONFIG_GDB_PYTHON|CONFIG_PACKAGE_gdb|CONFIG_PACKAGE_gdbserver)=y' .config; then
             echo '错误：GDB 仍然启用'
             grep -E '^(CONFIG_GDB|CONFIG_GDB_PYTHON|CONFIG_PACKAGE_gdb|CONFIG_PACKAGE_gdbserver)' .config || true
@@ -198,8 +217,9 @@ jobs:
 
       - name: 检查最终配置 (Validate final configuration)
         working-directory: ImmortalWrt
+        timeout-minutes: 15
         run: |
-          set -eux
+          set -euxo pipefail
 
           if grep -qE '^CONFIG_PACKAGE_kmod-fs-ksmbd=y|^CONFIG_PACKAGE_ksmbd-server=y|^CONFIG_PACKAGE_ksmbd-utils=y' .config; then
             echo '错误：ksmbd 相关软件包仍然启用'
@@ -226,16 +246,24 @@ jobs:
       - name: 多线程编译 ImmortalWrt (Build ImmortalWrt with multiple threads)
         if: ${{ inputs.multithreading == true }}
         working-directory: ImmortalWrt
+        timeout-minutes: 180
         run: |
-          set -eux
+          set -euxo pipefail
+          export PATH="/usr/lib/ccache:$PATH"
+          ccache -z
           make -j"$(nproc)" V=s
+          ccache -s
 
       - name: 单线程编译 ImmortalWrt (Build ImmortalWrt with one thread)
         if: ${{ inputs.multithreading == false }}
         working-directory: ImmortalWrt
+        timeout-minutes: 180
         run: |
-          set -eux
+          set -euxo pipefail
+          export PATH="/usr/lib/ccache:$PATH"
+          ccache -z
           make -j1 V=s
+          ccache -s
 
       - name: 上传编译结果 (Upload build result)
         uses: actions/upload-artifact@v4
@@ -243,74 +271,107 @@ jobs:
           name: ImmortalWrt-build-result
           path: ImmortalWrt/bin/targets
 
-
   build-ssh:
     if: ${{ inputs.ssh == true }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
     name: 🚀 编译 (Build) - SSH
 
     steps:
-      - name: 下载编译所需的依赖 (Install build dependencies)
+      - name: 初始化环境 (Initialize environment)
         run: |
-          sudo apt-get update
+          set -euxo pipefail
+          uname -a
+          df -h
+          free -h
 
-          sudo apt-get install -y \
-            ack \
-            antlr3 \
-            asciidoc \
-            autoconf \
-            automake \
-            autopoint \
-            binutils \
-            bison \
-            build-essential \
-            bzip2 \
-            ccache \
-            cmake \
-            cpio \
-            curl \
-            device-tree-compiler \
-            fastjar \
-            flex \
-            gawk \
-            gettext \
-            gcc-multilib \
-            g++-multilib \
-            git \
-            gperf \
-            haveged \
-            help2man \
-            intltool \
-            libelf-dev \
-            libglib2.0-dev \
-            libgmp3-dev \
-            libltdl-dev \
-            libmpc-dev \
-            libmpfr-dev \
-            libncurses5-dev \
-            libncursesw5-dev \
-            libreadline-dev \
-            libssl-dev \
-            libtool \
-            libz-dev \
-            patch \
-            perl \
-            pkgconf \
-            python3 \
-            python3-dev \
-            python3-pip \
-            python3-setuptools \
-            rsync \
-            subversion \
-            swig \
-            unzip \
-            wget \
-            xsltproc \
-            xz-utils \
-            zlib1g-dev
+      - name: 配置 ccache (Setup ccache)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/ccache
+            ~/.cache/pip
+          key: ${{ runner.os }}-immortalwrt-ssh-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-immortalwrt-ssh-
+
+      - name: 下载编译所需的依赖 (Install build dependencies)
+        timeout-minutes: 30
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          retry_apt() {
+            local attempt=1
+            while (( attempt <= 5 )); do
+              echo "APT attempt ${attempt}/5"
+              sudo DEBIAN_FRONTEND=noninteractive apt-get update && \
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+                ack \
+                antlr3 \
+                asciidoc \
+                autoconf \
+                automake \
+                autopoint \
+                binutils \
+                bison \
+                build-essential \
+                bzip2 \
+                ccache \
+                cmake \
+                cpio \
+                curl \
+                device-tree-compiler \
+                fastjar \
+                flex \
+                gawk \
+                gettext \
+                gcc-multilib \
+                g++-multilib \
+                git \
+                gperf \
+                haveged \
+                help2man \
+                intltool \
+                libelf-dev \
+                libglib2.0-dev \
+                libgmp3-dev \
+                libltdl-dev \
+                libmpc-dev \
+                libmpfr-dev \
+                libncurses-dev \
+                libreadline-dev \
+                libssl-dev \
+                libtool \
+                patch \
+                perl \
+                pkgconf \
+                python3 \
+                python3-dev \
+                python3-pip \
+                python3-setuptools \
+                rsync \
+                subversion \
+                swig \
+                unzip \
+                wget \
+                xsltproc \
+                xz-utils \
+                zlib1g-dev && return 0
+              echo "apt install failed, retrying in 20s..."
+              sleep 20
+              attempt=$((attempt+1))
+            done
+            echo "apt install failed after 5 attempts"
+            exit 1
+          }
+
+          retry_apt
 
       - name: 克隆当前仓库 (Clone current repo)
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: 克隆 ImmortalWrt 仓库 (Clone ImmortalWrt repo)
         uses: actions/checkout@v4
@@ -318,45 +379,43 @@ jobs:
           repository: '${{ inputs.owner }}/${{ inputs.repo }}'
           ref: ${{ inputs.branch }}
           path: ImmortalWrt
+          fetch-depth: 1
 
       - name: 复制配置和构建脚本 (Copy configuration and build scripts)
         run: |
-          set -eux
-
+          set -euxo pipefail
           cp -f .config ImmortalWrt/.config
           cp -f feeds.conf.default ImmortalWrt/feeds.conf.default
           cp -f diy.sh ImmortalWrt/diy.sh
 
       - name: 修改为 NAND U-Boot 适配型号 (Configure NAND U-Boot target)
         run: |
-          set -eux
-          # 删掉默认的 eMMC / 标准版配置项
+          set -euxo pipefail
           sed -i '/CONFIG_TARGET_mediatek_filogic_DEVICE_cmcc_rax3000m/d' ImmortalWrt/.config
-          # 写入适用于第三方 U-Boot 的 NAND 适配配置项
           echo "CONFIG_TARGET_mediatek_filogic_DEVICE_cmcc_rax3000m-nand-ubootmod=y" >> ImmortalWrt/.config
-          
+
       - name: 运行 diy.sh (Run diy.sh)
         working-directory: ImmortalWrt
+        timeout-minutes: 30
         run: |
-          set -eux
-
+          set -euxo pipefail
           chmod +x diy.sh
           ./diy.sh
 
       - name: 更新并安装 feeds (Update and install feeds)
         working-directory: ImmortalWrt
+        timeout-minutes: 30
         run: |
-          set -eux
-
+          set -euxo pipefail
           ./scripts/feeds clean
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
       - name: 删除产生递归依赖的 ksmbd 包 (Remove recursive ksmbd package)
         working-directory: ImmortalWrt
+        timeout-minutes: 15
         run: |
-          set -eux
-
+          set -euxo pipefail
           find feeds package/feeds \
             -type d \
             \( -iname '*ksmbd*' -o -iname '*ksmbd-server*' \) \
@@ -371,9 +430,9 @@ jobs:
 
       - name: 生成最终配置 (Generate final configuration)
         working-directory: ImmortalWrt
+        timeout-minutes: 30
         run: |
-          set -eux
-
+          set -euxo pipefail
           make defconfig
 
       - name: 开启 SSH 服务 (Start SSH service)
@@ -383,9 +442,9 @@ jobs:
 
       - name: 禁用 GDB 工具链组件 (Disable GDB)
         working-directory: ImmortalWrt
+        timeout-minutes: 15
         run: |
-          set -eux
-
+          set -euxo pipefail
           sed -i -E \
             -e 's/^CONFIG_GDB=y$/# CONFIG_GDB is not set/' \
             -e 's/^CONFIG_GDB_PYTHON=y$/# CONFIG_GDB_PYTHON is not set/' \
@@ -393,11 +452,8 @@ jobs:
             -e 's/^CONFIG_PACKAGE_gdbserver=y$/# CONFIG_PACKAGE_gdbserver is not set/' \
             .config
 
-          grep -q '^CONFIG_GDB=' .config || \
-            echo '# CONFIG_GDB is not set' >> .config
-
-          grep -q '^CONFIG_GDB_PYTHON=' .config || \
-            echo '# CONFIG_GDB_PYTHON is not set' >> .config
+          grep -q '^CONFIG_GDB=' .config || echo '# CONFIG_GDB is not set' >> .config
+          grep -q '^CONFIG_GDB_PYTHON=' .config || echo '# CONFIG_GDB_PYTHON is not set' >> .config
 
           if grep -qE '^(CONFIG_GDB|CONFIG_GDB_PYTHON|CONFIG_PACKAGE_gdb|CONFIG_PACKAGE_gdbserver)=y' .config; then
             echo '错误：GDB 仍然启用'
@@ -410,8 +466,9 @@ jobs:
 
       - name: 检查最终配置 (Validate final configuration)
         working-directory: ImmortalWrt
+        timeout-minutes: 15
         run: |
-          set -eux
+          set -euxo pipefail
 
           if grep -qE '^CONFIG_PACKAGE_kmod-fs-ksmbd=y|^CONFIG_PACKAGE_ksmbd-server=y|^CONFIG_PACKAGE_ksmbd-utils=y' .config; then
             echo '错误：ksmbd 相关软件包仍然启用'
@@ -438,16 +495,24 @@ jobs:
       - name: 多线程编译 ImmortalWrt (Build ImmortalWrt with multiple threads)
         if: ${{ inputs.multithreading == true }}
         working-directory: ImmortalWrt
+        timeout-minutes: 180
         run: |
-          set -eux
+          set -euxo pipefail
+          export PATH="/usr/lib/ccache:$PATH"
+          ccache -z
           make -j"$(nproc)" V=s
+          ccache -s
 
       - name: 单线程编译 ImmortalWrt (Build ImmortalWrt with one thread)
         if: ${{ inputs.multithreading == false }}
         working-directory: ImmortalWrt
+        timeout-minutes: 180
         run: |
-          set -eux
+          set -euxo pipefail
+          export PATH="/usr/lib/ccache:$PATH"
+          ccache -z
           make -j1 V=s
+          ccache -s
 
       - name: 上传编译结果 (Upload build result)
         uses: actions/upload-artifact@v4
