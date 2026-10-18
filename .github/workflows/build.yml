@@ -327,6 +327,14 @@ jobs:
           cp -f feeds.conf.default ImmortalWrt/feeds.conf.default
           cp -f diy.sh ImmortalWrt/diy.sh
 
+- name: 修改为 NAND U-Boot 适配型号 (Configure NAND U-Boot target)
+        run: |
+          set -eux
+          # 删掉默认的 eMMC / 标准版配置项
+          sed -i '/CONFIG_TARGET_mediatek_filogic_DEVICE_cmcc_rax3000m/d' ImmortalWrt/.config
+          # 写入适用于第三方 U-Boot 的 NAND 适配配置项
+          echo "CONFIG_TARGET_mediatek_filogic_DEVICE_cmcc_rax3000m-nand-ubootmod=y" >> ImmortalWrt/.config
+          
       - name: 运行 diy.sh (Run diy.sh)
         working-directory: ImmortalWrt
         run: |
