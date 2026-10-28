@@ -32,3 +32,7 @@ grep -q '^CONFIG_PACKAGE_luci-i18n-openclash-zh-cn=y$' .config || echo 'CONFIG_P
 
 # 预置 Mihomo 内核（失败不阻断编译）
 "$GITHUB_WORKSPACE/fetch-mihomo.sh" || echo "Mihomo core not baked in"
+
+# 高级重启插件
+grep -q '^CONFIG_PACKAGE_luci-app-advanced-reboot=y$' .config || echo 'CONFIG_PACKAGE_luci-app-advanced-reboot=y' >> .config
+grep -q '^CONFIG_PACKAGE_luci-i18n-advanced-reboot-zh-cn=y$' .config || echo 'CONFIG_PACKAGE_luci-i18n-advanced-reboot-zh-cn=y' >> .config
